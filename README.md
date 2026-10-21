@@ -1,0 +1,48 @@
+# Claude 会话归档导出
+
+一个 Edge / Chrome 扩展（Manifest V3）。在任意 claude.ai 会话页点一下，把整个会话打包成一个 ZIP 下载：
+
+```
+会话名_日期.zip
+├── index.html            自包含网页（离线可看）
+├── conversation.json     原始会话数据
+└── files/
+    ├── attachments/      你上传的附件全文
+    ├── artifacts/        Artifact 源文件（HTML 等，可预览）
+    └── deliveries/       Claude 发给你的文件
+```
+
+## 功能
+
+- **完整消息时间线**：用户与 Claude 全部消息，Markdown 渲染（代码块、表格、列表、引用）
+- **思考摘要**：保留官方返回的过程摘要，默认折叠
+- **工具调用**：完整 input JSON 与对应 result，失败标红
+- **附件全文**：解析站内 `extracted_content`
+- **产物还原**：Artifact 按 Write/Edit 记录回放还原；zip 按目录重建
+- **网页内检索**：全文搜索、只看用户消息、按类型折叠、目录跳转、下载 JSON
+
+## 安装
+
+1. 下载或克隆本仓库
+2. 打开 `edge://extensions`（Chrome 为 `chrome://extensions`）
+3. 开启「开发人员模式」→「加载解压缩的扩展」→ 选择本目录
+4. 打开任意 `https://claude.ai/chat/...` 页面，右下角出现「导出归档 ZIP」
+
+## 文件说明
+
+| 文件 | 作用 |
+|---|---|
+| `manifest.json` | MV3 清单，注入 `claude.ai/chat/*` |
+| `content.js` | 主逻辑：读取会话、还原文件、生成网页与 ZIP |
+| `zip.js` | 无依赖的 ZIP 打包实现（store 模式） |
+
+## 已知限制
+
+- 站内没有通用文件下载接口：文本文件靠会话里的 Write/Edit 记录还原；脚本生成或原样转发的文件可能拿不到，会在页面上标为「未能自动获取」
+- 图片只能取到站内预览图（转成 PNG），分辨率可能低于原图
+- Artifact 若在发布前被脚本二次加工，还原结果可能与最终版有差异
+- 需要浏览器已登录 claude.ai
+
+## 数据与隐私
+
+所有解析都在本地浏览器内完成，不经过任何第三方服务器。

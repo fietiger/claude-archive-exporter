@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Claude 会话归档导出",
+  "version": "1.1.0",
+  "description": "把 Claude 会话导出为自包含网页、附件与产物，并打包成一个 ZIP 下载。兼容 Edge / Chrome。",
+  "host_permissions": ["https://claude.ai/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/chat/*"],
+      "js": ["zip.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
