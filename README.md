@@ -28,6 +28,12 @@
 3. 开启「开发人员模式」→「加载解压缩的扩展」→ 选择本目录
 4. 打开任意 `https://claude.ai/chat/...` 页面，右下角出现「导出归档 ZIP」
 
+## 市场发布
+
+- 发布清单：[RELEASE.md](RELEASE.md)
+- 隐私策略：[privacy.html](privacy.html)
+- 构建可上传 ZIP：`python tools\package_release.py`，输出 `dist/claude-archive-exporter.zip`
+
 ## 文件说明
 
 | 文件 | 作用 |
@@ -35,6 +41,10 @@
 | `manifest.json` | MV3 清单，注入 `claude.ai/chat/*` |
 | `content.js` | 主逻辑：读取会话、还原文件、生成网页与 ZIP |
 | `zip.js` | 无依赖的 ZIP 打包实现（store 模式） |
+| `privacy.html` | 市场隐私策略页 |
+| `RELEASE.md` | Edge / Chrome 市场发布清单 |
+| `tools/make_assets.py` | 生成图标与截图占位图 |
+| `tools/package_release.py` | 打包商店上传 ZIP |
 
 ## 已知限制
 

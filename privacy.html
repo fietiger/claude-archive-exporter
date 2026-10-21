@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Archive Export — Privacy Policy</title>
+  <style>
+    body{margin:0;background:#f5f6f2;color:#14232e;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    main{max-width:820px;margin:0 auto;padding:48px 24px}
+    h1{font-size:28px;margin:0 0 12px}
+    h2{font-size:20px;margin-top:28px}
+    code{background:#13202a;color:#fff;padding:2px 6px;border-radius:4px}
+    table{border-collapse:collapse;width:100%;margin:12px 0}
+    td,th{border:1px solid #d8dedb;padding:8px;vertical-align:top;text-align:left}
+    .note{background:#fff;border:1px solid #d8dedb;border-radius:8px;padding:14px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Privacy Policy</h1>
+  <p>Last updated: 2026-10-21</p>
+
+  <p>The <strong>Claude 会话归档导出</strong> browser extension helps users export Claude conversations to a local ZIP archive. This extension is designed to run only when you visit <code>https://claude.ai/chat/*</code> pages.</p>
+
+  <h2>Data processed</h2>
+  <p>The extension reads the currently open Claude conversation through claude.ai website APIs that are already available to your logged-in browser session. It may include conversation messages, attachments, artifacts, file metadata, and raw JSON data.</p>
+
+  <h2>Where data goes</h2>
+  <table>
+    <tr><th>Data</th><th>Destination</th></tr>
+    <tr><td>Conversation content and files</td><td>Your local browser ZIP download only</td></tr>
+    <tr><td>No analytics, no telemetry, no third-party requests</td><td>None</td></tr>
+  </table>
+
+  <h2>Permissions</h2>
+  <p>The extension requests <code>host_permissions</code> for <code>https://claude.ai/*</code> so it can read the Claude page and call Claude's own same-origin APIs. It does not request broad browser permissions such as storage, cookies, or downloads.</p>
+
+  <h2>User control</h2>
+  <p>You can remove the extension at any time from your browser extension settings. The extension does not persist data between sessions.</p>
+
+  <h2>Contact</h2>
+  <p>Report issues or request privacy information: <a href="https://github.com/fietiger/claude-archive-exporter/issues">GitHub Issues</a>.</p>
+
+  <div class="note">
+    <strong>Short declaration for marketplaces:</strong><br/>
+    This extension does not collect personal data. It only processes Claude conversation content in the user's logged-in browser session and packages it into a local ZIP file that the user downloads. It does not transmit data to third parties.
+  </div>
+</main>
+</body>
+</html>
