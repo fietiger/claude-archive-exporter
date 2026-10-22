@@ -49,7 +49,8 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 
 - index.html：自包含离线网页，含完整消息时间线、Markdown 渲染、思考摘要、工具调用
 - conversation.json：原始会话数据
-- files/attachments：你上传附件的全文
+- manifest.json：归档清单：文件列表、大小、资产来源、缺失项
+- files/attachments：你上传附件的原件或提取全文；拿不到原件时会明确标记
 - files/artifacts：Artifact 源文件（HTML 等，可直接预览）
 - files/deliveries：Claude 发给你的文件
 
@@ -57,15 +58,17 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 1. 消息导出：用户/Claude 全部消息，代码块、表格、列表、引用
 2. 思考摘要：官方返回的过程摘要默认折叠、可展开
 3. 工具调用：完整 input JSON 与 result，失败标红
-4. 附件全文：解析站内 extracted_content
-5. 产物还原：Artifact 按 Write/Edit 记录回放，zip 按目录重建
-6. 检索：全文搜索、只看用户消息、目录跳转、下载 JSON
+4. 附件原件：优先下载附件原始文件；拿不到时保存提取全文，再拿不到则保留元信息
+5. 产物还原：Artifact 按 Write/Edit 记录回放，zip 按目录重建，并标注来源
+6. 归档清单：生成 manifest.json，记录每个文件与资产来源
+7. 检索：全文搜索、只看用户消息、目录跳转、下载 JSON
 
 数据与隐私：
 所有解析都在本地浏览器内完成，不经过任何第三方服务器。
 
 已知限制：
 - 需要浏览器已登录 claude.ai
+- 附件优先保存原件；拿不到原件时保存提取全文或元信息，并在 manifest.json 中明确标记来源
 - 部分文件无法通过接口获取，扩展会按会话写入记录还原；仍取不到的会标为「未能自动获取」
 - 图片只取到站内预览图并转 PNG，分辨率可能低于原图
 - Artifact 在发布前被脚本二次加工时，还原结果可能与最终版有差异

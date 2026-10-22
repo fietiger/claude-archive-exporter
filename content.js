@@ -182,21 +182,52 @@
     });
     return out.join("\n").trim();
   }
-  function collectAttachmentFiles(msgs, entries, assets) {
-    msgs.forEach((m, mi) => {
-      (m.attachments || []).forEach((a, ai) => {
+  function sourceItem(status, source, note) {
+    return { status: status, source: source, note: note };
+  }
+  function addSource(assets, path, kind, name, size, desc, source) {
+    const asset = {
+      path: path, name: name, kind: kind, size: size, desc: desc,
+      source: source.source, status: source.status, note: source.note
+    };
+    if (source.preview) asset.preview = true;
+    assets.push(asset);
+    return asset;
+  }
+  async function collectAttachmentFiles(org, msgs, entries, assets) {
+    const seen = new Set();
+    for (const m of msgs) {
+      for (const a of (m.attachments || [])) {
         const text = a.extracted_content || a.extracted_text || "";
-        if (!text) return;
         const kind = a.file_type || "txt";
-        const name = safeName(a.file_name || ("附件-" + (mi + 1) + (ai ? "-" + (ai + 1) : "") + "." + kind));
-        const path = "files/attachments/" + name;
-        entries.push({ name: path, data: enc.encode(text) });
-        assets.push({
-          path: path, name: name, kind: (kind || "txt").toUpperCase().slice(0, 4),
-          size: enc.encode(text).length, desc: "会话中的附件，已保存提取后的全文。", preview: false
-        });
-      });
-    });
+        const name = safeName(a.file_name || ("附件-" + kind));
+        if (seen.has(name)) continue;
+        seen.add(name);
+
+        let original = null;
+        if (a.file_uuid) {
+          try { original = await fetchFile(org, a.file_uuid); } catch (e) { original = null; }
+        }
+        if (original) {
+          const buf = new Uint8Array(await original.blob.arrayBuffer());
+          entries.push({ name: "files/attachments/" + name, data: buf });
+          addSource(assets, "files/attachments/" + name, kind.toUpperCase().slice(0, 4), name, buf.length,
+            "会话中的附件原件，已保存原始文件。",
+            sourceItem("downloaded", "claude-file-api", "原始二进制文件。"));
+          continue;
+        }
+        if (text) {
+          entries.push({ name: "files/attachments/" + name, data: enc.encode(text) });
+          addSource(assets, "files/attachments/" + name, kind.toUpperCase().slice(0, 4), name, enc.encode(text).length,
+            "会话中的附件，已保存提取后的全文。",
+            sourceItem("extracted-text", "claude-api-extracted-content", "原始二进制未嵌入。"));
+        } else {
+          addSource(assets, "", kind.toUpperCase().slice(0, 4), name, a.file_size || 0,
+            "会话中的附件，接口未返回提取文本。",
+            sourceItem("metadata-only", "claude-api", "请在 claude.ai 页面手动下载原件。"));
+        }
+      }
+    }
   }
   function artifactPathSet(msgs) {
     const set = new Set();
@@ -254,6 +285,22 @@
     if (typeof cur !== "string") return;
     files.set(target, cur.split(oldS).join(newS));
   }
+  function artifactVersions(msgs, wanted) {
+    const versions = new Map();
+    msgs.forEach(m => (m.content || []).forEach(b => {
+      if (b.type !== "tool_use") return;
+      const inp = b.input || {};
+      if (b.name === "Artifact" && inp.file_path && wanted.has(inp.file_path)) {
+        if (!versions.has(inp.file_path)) versions.set(inp.file_path, []);
+        versions.get(inp.file_path).push({ version: versions.get(inp.file_path).length + 1, source: "artifact-tool-use", note: "来自 Artifact 工具调用记录。" });
+      }
+      if ((b.name === "Write" || b.name === "Edit") && inp.file_path && wanted.has(inp.file_path)) {
+        if (!versions.has(inp.file_path)) versions.set(inp.file_path, []);
+        versions.get(inp.file_path).push({ version: versions.get(inp.file_path).length + 1, source: "write-or-edit", note: b.name + " 记录。" });
+      }
+    }));
+    return versions;
+  }
   function collectArtifacts(msgs, entries, assets) {
     const wanted = artifactPathSet(msgs);
     if (!wanted.size) return;
@@ -271,12 +318,10 @@
       used.add(name);
       const path = "files/artifacts/" + name;
       entries.push({ name: path, data: enc.encode(text) });
-      assets.push({
-        path: path, name: name, kind: ext.toUpperCase().slice(0, 4),
-        size: enc.encode(text).length,
-        desc: "Claude Artifact 源文件，按会话中的写入与编辑记录还原。",
-        preview: ext === "html" || ext === "htm" || ext === "svg"
-      });
+      const vers = artifactVersions(msgs, wanted).get(p) || [];
+      addSource(assets, path, ext.toUpperCase().slice(0, 4), name, enc.encode(text).length,
+        "Claude Artifact 源文件，按会话中的写入与编辑记录还原" + (vers.length ? "（" + vers.length + " 次写入/编辑）" : "") + "。",
+        sourceItem("replayed", "session-write-edits", "如需完整版本历史，请保留 conversation.json 重新回放。"));
     });
   }
   function collectDeliveries(msgs) {
@@ -304,7 +349,7 @@
     const byBase = {};
     written.forEach((text, p) => {
       const k = basename(p).toLowerCase();
-      if (!byBase[k] || byBase[k].text.length < text.length) byBase[k] = { text: text, path: p };
+      if (!byBase[k] || byBase[k].text.length > text.length) byBase[k] = { text: text, path: p };
     });
 
     const seen = new Set();
@@ -320,19 +365,19 @@
 
       if (got) {
         let blob = got.blob;
+        let source = "claude-file-api";
         let note = "来自站内文件接口。";
         if (/^image\//.test(got.type) && ["png", "jpg", "jpeg"].includes(ext)) {
           const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
           const converted = await convertImage(blob, mime);
-          if (converted) { blob = converted; note = "站内只提供预览图，已按原扩展名转换，分辨率可能与原图不同。"; }
+          if (converted) { blob = converted; source = "claude-image-preview"; note = "站内只提供预览图，已按原扩展名转换，分辨率可能与原图不同。"; }
         }
         const buf = new Uint8Array(await blob.arrayBuffer());
         entries.push({ name: "files/deliveries/" + name, data: buf });
-        assets.push({
-          path: "files/deliveries/" + name, name: name,
-          kind: ext.toUpperCase().slice(0, 4), size: buf.length,
-          desc: "Claude 在会话中发送的文件。" + note, preview: false
-        });
+        const src = sourceItem("downloaded", source, note);
+        if (source === "claude-image-preview") src.preview = true;
+        addSource(assets, "files/deliveries/" + name, ext.toUpperCase().slice(0, 4), name, buf.length,
+          "Claude 在会话中发送的文件。" + note, src);
         continue;
       }
 
@@ -343,11 +388,9 @@
         const expect = meta[d.uuid] && meta[d.uuid].size;
         if (!expect || Math.abs(bytes - expect) <= Math.max(64, expect * 0.05)) {
           entries.push({ name: "files/deliveries/" + name, data: enc.encode(hit.text) });
-          assets.push({
-            path: "files/deliveries/" + name, name: name,
-            kind: ext.toUpperCase().slice(0, 4), size: bytes,
-            desc: "Claude 在会话中发送的文件，按会话里的写入记录还原。", preview: false
-          });
+          addSource(assets, "files/deliveries/" + name, ext.toUpperCase().slice(0, 4), name, bytes,
+            "Claude 在会话中发送的文件，按会话里的写入记录还原。",
+            sourceItem("replayed", "session-write-edits", "接口未返回二进制时启用。"));
           continue;
         }
       }
@@ -369,10 +412,9 @@
             files.forEach((text, p) => inner.push({ name: p.slice(cut.length), data: enc.encode(text) }));
             const buf = makeZip(inner);
             entries.push({ name: "files/deliveries/" + name, data: buf });
-            assets.push({
-              path: "files/deliveries/" + name, name: name, kind: "ZIP", size: buf.length,
-              desc: "Claude 在会话中发送的压缩包，已按写入记录重建（" + inner.length + " 个文件）。", preview: false
-            });
+            addSource(assets, "files/deliveries/" + name, "ZIP", name, buf.length,
+              "Claude 在会话中发送的压缩包，已按写入记录重建（" + inner.length + " 个文件）。",
+              sourceItem("rebuilt", "session-write-edits", "接口未返回压缩包二进制时启用。"));
             continue;
           }
         }
@@ -422,13 +464,40 @@
       ? '<span class="amiss">未能自动获取</span>'
       : '<a class="abtn" href="' + esc(a.path) + '" download>下载</a>' +
         (a.preview ? '<a class="abtn ghost" href="' + esc(a.path) + '" target="_blank">预览</a>' : "");
+    const tag = a.source ? '<span class="asrc" data-src="' + esc(a.source) + '" data-status="' + esc(a.status || "") + '">' +
+      esc(a.source) + (a.status && a.status !== "downloaded" ? " · " + a.status : "") + "</span>" : "";
     return '<div class="acard"><span class="akind">' + esc(a.kind) + "</span>" +
       '<div class="ainfo"><div class="aname">' + esc(a.name) + "</div>" +
       '<div class="adesc">' + esc(a.desc) + "</div>" +
-      '<div class="ameta">' + (a.size ? human(a.size) : "") + "</div></div>" +
+      '<div class="ameta">' + (a.size ? human(a.size) : "") + "</div>" +
+      '<div class="asrcs">' + tag + "</div></div>" +
       '<div class="abtns">' + btn + "</div></div>";
   }
-  function buildHtml(conv, model, assets, missing) {
+  function buildManifest(conv, model, entries, assets, missing) {
+    const files = entries.map(e => ({ path: e.name, size: e.data.length }));
+    return {
+      schema: "claude-archive/manifest-v1",
+      exported_at: new Date().toISOString(),
+      conversation: {
+        id: conv.id || conv.conversation_uuid || "",
+        name: conv.name || "",
+        model: conv.model || "",
+        created_at: conv.created_at || "",
+        updated_at: conv.updated_at || ""
+      },
+      counts: {
+        raw_messages: model.all,
+        visible_messages: model.visible,
+        tool_calls: model.tools,
+        thinking_summaries: model.think,
+        files: files.length
+      },
+      files: files,
+      assets: assets,
+      missing: missing
+    };
+  }
+  function buildHtml(conv, model, entries, assets, missing) {
     const title = conv.name || "Claude 会话";
     const allMissing = missing.map(n => ({
       name: n, kind: (n.split(".").pop() || "bin").toUpperCase().slice(0, 4),
@@ -493,6 +562,11 @@ h1{font-size:25px;line-height:1.3;margin:6px 0 10px;font-weight:800}
 .akind{flex:0 0 auto;font-family:var(--mono);font-size:10px;font-weight:700;color:#fff;background:var(--teal);border-radius:5px;padding:3px 6px;margin-top:2px}
 .ainfo{flex:1 1 auto;min-width:0}.aname{font-family:var(--mono);font-size:12.8px;font-weight:700;word-break:break-all}
 .adesc{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.6}.ameta{font-size:11px;color:#93A1A9;margin-top:4px;font-family:var(--mono)}
+.asrcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.asrc{font-family:var(--mono);font-size:10px;background:#E3F3F5;color:#0B6E7F;border-radius:4px;padding:2px 6px}
+.asrc[data-status="replayed"],.asrc[data-status="rebuilt"]{background:#FBEFE3;color:#C85F12}
+.asrc[data-status="extracted-text"]{background:#EAF3F4;color:#0B6E7F}
+.asrc[data-status="metadata-only"]{background:#F3F4F6;color:#5E6B75}
 .abtns{flex:0 0 auto;display:flex;flex-direction:column;gap:6px;align-items:stretch}
 .abtn{border:1px solid var(--dark);background:var(--dark);color:#fff;border-radius:7px;padding:5px 11px;font-size:12px;text-align:center;text-decoration:none;font-weight:600}
 .abtn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
@@ -579,13 +653,14 @@ apply();
     const missing = [];
 
     const model = buildModel(msgs);
-    collectAttachmentFiles(msgs, entries, assets);
+    await collectAttachmentFiles(org, msgs, entries, assets);
     collectArtifacts(msgs, entries, assets);
     await collectDeliveryFiles(org, msgs, entries, assets, missing);
 
     entries.unshift({ name: "conversation.json", data: enc.encode(JSON.stringify(conv, null, 2)) });
-    const html = buildHtml(conv, model, assets, missing);
+    const html = buildHtml(conv, model, entries, assets, missing);
     entries.unshift({ name: "index.html", data: enc.encode(html) });
+    entries.push({ name: "manifest.json", data: enc.encode(JSON.stringify(buildManifest(conv, model, entries, assets, missing), null, 2)) });
 
     const zip = makeZip(entries);
     return { zip: zip, title: conv.name || "claude-conversation", count: entries.length };

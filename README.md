@@ -6,8 +6,9 @@
 会话名_日期.zip
 ├── index.html            自包含网页（离线可看）
 ├── conversation.json     原始会话数据
+├── manifest.json         归档清单：文件列表、大小、资产来源、缺失项
 └── files/
-    ├── attachments/      你上传的附件全文
+    ├── attachments/      你上传附件的提取全文或元信息
     ├── artifacts/        Artifact 源文件（HTML 等，可预览）
     └── deliveries/       Claude 发给你的文件
 ```
@@ -17,8 +18,9 @@
 - **完整消息时间线**：用户与 Claude 全部消息，Markdown 渲染（代码块、表格、列表、引用）
 - **思考摘要**：保留官方返回的过程摘要，默认折叠
 - **工具调用**：完整 input JSON 与对应 result，失败标红
-- **附件全文**：解析站内 `extracted_content`
-- **产物还原**：Artifact 按 Write/Edit 记录回放还原；zip 按目录重建
+- **附件全文**：优先保存附件原件；拿不到原件时保存提取全文，再拿不到则保留附件元信息
+- **产物还原**：Artifact 按 Write/Edit 记录回放还原；zip 按目录重建，并标注来源与写入/编辑次数
+- **归档清单**：生成 `manifest.json`，记录文件列表、大小、资产来源和缺失项
 - **网页内检索**：全文搜索、只看用户消息、按类型折叠、目录跳转、下载 JSON
 
 ## 安装
@@ -49,6 +51,7 @@
 ## 已知限制
 
 - 站内没有通用文件下载接口：文本文件靠会话里的 Write/Edit 记录还原；脚本生成或原样转发的文件可能拿不到，会在页面上标为「未能自动获取」
+- 附件目前保存的是“提取后的全文”或元信息，不是所有附件的原始二进制文件；`manifest.json` 会明确标记 `extracted-text`、`metadata-only`、`replayed`、`rebuilt`、`downloaded`
 - 图片只能取到站内预览图（转成 PNG），分辨率可能低于原图
 - Artifact 若在发布前被脚本二次加工，还原结果可能与最终版有差异
 - 需要浏览器已登录 claude.ai
