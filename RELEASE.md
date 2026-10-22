@@ -50,7 +50,7 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 - index.html：自包含离线网页，含完整消息时间线、Markdown 渲染、思考摘要、工具调用
 - conversation.json：原始会话数据
 - manifest.json：归档清单：文件列表、大小、SHA-256、资产来源、缺失项
-- files/attachments：你上传附件的原件或提取全文；拿不到原件时会明确标记
+- files/attachments：你上传附件的原件或提取全文；直接粘贴的图片也会保存并内嵌预览
 - files/artifacts：Artifact 源文件（HTML 等，可直接预览）
 - files/artifacts/versions：Artifact 每次写入/编辑的版本快照（v1/v2/…）
 - files/deliveries：Claude 发给你的文件
@@ -94,7 +94,7 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 3. 上传 `dist/claude-archive-exporter.zip`
 4. 填写：
    - 名称、短描述、完整描述（见上）
-   - 版本：`1.3.0`
+   - 版本：`1.3.1`
    - 分类：工作效率 / 开发者工具
    - 隐私政策 URL（`privacy.html` 的托管地址，或粘贴全文）
    - 支持 URL：`https://github.com/fietiger/claude-archive-exporter/issues`
@@ -109,7 +109,7 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 3. 创建新扩展，上传 `dist/claude-archive-exporter.zip`
 4. 填写：
    - 名称、简介、完整描述（见上）
-   - 版本：`1.3.0`
+   - 版本：`1.3.1`
    - 分类：Tools / Developer tools
    - 隐私政策：粘贴 `privacy.html` 全文或提供可访问 URL
    - 支持链接：GitHub issues
@@ -123,4 +123,6 @@ Claude 会话归档导出（Chrome/Edge 扩展）
 - 重新执行 `python tools/package_release.py`
 - 在两个市场分别上传新 ZIP
 - 市场审核期间保持 ZIP 内文件与仓库一致
+
+
 

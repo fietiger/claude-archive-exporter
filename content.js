@@ -196,8 +196,69 @@
   }
   async function collectAttachmentFiles(org, msgs, entries, assets) {
     const seen = new Set();
+    const seenUuid = new Set();
+    // 粘贴的图片不在 attachments 里，只出现在 m.files（file_kind=image，无提取文本）。
+    const paths = new Map();
+    const saveFile = async (f) => {
+      const uuid = f.file_uuid || f.uuid;
+      if (!uuid || seenUuid.has(uuid)) return;
+      seenUuid.add(uuid);
+      const isImage = (f.file_kind || "").indexOf("image") >= 0;
+      const raw = safeName(f.file_name || ("文件-" + uuid.slice(0, 8)));
+      const base = raw.replace(/\.[^.]+$/, "");
+      const name = isImage ? base + ".png" : raw;
+      if (seen.has(name)) return;
+      seen.add(name);
+      let got = null;
+      try { got = await fetchFile(org, uuid); } catch (e) { got = null; }
+      if (got) {
+        let buf = new Uint8Array(await got.blob.arrayBuffer());
+        let finalName = name;
+        if (isImage) {
+          const png = await convertImage(got.blob, "image/png");
+          if (png) buf = new Uint8Array(await png.arrayBuffer());
+          else {
+            // 无法解码时保留站点返回的原始格式，避免扩展名与内容不符。
+            const ct = (got.type || "").split(";")[0];
+            const ext = ct.indexOf("webp") >= 0 ? ".webp" : ct.indexOf("jpeg") >= 0 ? ".jpg" : ".png";
+            finalName = base + ext;
+          }
+        }
+        const path = "files/attachments/" + finalName;
+        entries.push({ name: path, data: buf });
+        paths.set(uuid, path);
+        addSource(assets, path, isImage ? "IMG" : (f.file_kind || "FILE").toUpperCase().slice(0, 4), finalName, buf.length,
+          isImage ? "你粘贴/上传的图片，已保存。" : "会话中的文件，已保存原始文件。",
+          sourceItem("downloaded", "claude-file-api", isImage ? "取自站内预览图，分辨率可能低于原图。" : "原始二进制文件。"));
+        return;
+      }
+      const txt = textByUuid.get(uuid) || "";
+      if (txt) {
+        const path = "files/attachments/" + name;
+        entries.push({ name: path, data: enc.encode(txt) });
+        paths.set(uuid, path);
+        addSource(assets, path, (f.file_kind || "FILE").toUpperCase().slice(0, 4), name, enc.encode(txt).length,
+          "会话中的文件，接口未返回原件，已保存提取后的全文。",
+          sourceItem("extracted-text", "claude-api-extracted-content", "原始二进制未嵌入。"));
+        return;
+      }
+      addSource(assets, "", isImage ? "IMG" : "FILE", name, f.size_bytes || 0,
+        isImage ? "你粘贴/上传的图片，接口未返回可用内容。" : "会话中的文件，接口未返回可用内容。",
+        sourceItem("metadata-only", "claude-api", "请在 claude.ai 页面对图片右键另存为。"));
+    };
+    // 附件的提取全文按 file_uuid 索引，供 m.files 下载失败时兜底。
+    const textByUuid = new Map();
+    msgs.forEach(m => (m.attachments || []).forEach(a => {
+      const t = a.extracted_content || a.extracted_text || "";
+      if (a.file_uuid && t) textByUuid.set(a.file_uuid, t);
+    }));
+    const handled = new Set();
     for (const m of msgs) {
+      for (const f of (m.files || [])) {
+        try { await saveFile(f); handled.add(f.file_uuid || f.uuid); } catch (e) { /* 跳过单个文件 */ }
+      }
       for (const a of (m.attachments || [])) {
+        if (a.file_uuid && handled.has(a.file_uuid)) continue;
         const text = a.extracted_content || a.extracted_text || "";
         const kind = a.file_type || "txt";
         const name = safeName(a.file_name || ("附件-" + kind));
@@ -228,6 +289,7 @@
         }
       }
     }
+    return paths;
   }
   function artifactPathSet(msgs) {
     const set = new Set();
@@ -487,7 +549,10 @@
     });
     (d.atts || []).forEach(a => {
       const link = a.path ? ' <a class="mini" href="' + esc(a.path) + '">下载</a>' : "";
-      parts.push('<div class="att"><span class="an">' + esc(a.name) + "</span>" + link +
+      const img = a.image
+        ? '<a href="' + esc(a.path) + '" target="_blank"><img class="aprev" src="' + esc(a.path) + '" alt="' + esc(a.name) + '" loading="lazy"></a>'
+        : "";
+      parts.push('<div class="att">' + img + '<span class="an">' + esc(a.name) + "</span>" + link +
         '<span class="am">' + esc(a.kind || "") + " " + human(a.size) + "</span>" +
         (a.text ? '<details><summary>展开全文（' + a.text.length.toLocaleString() + " 字符）</summary><pre>" + esc(a.text) + "</pre></details>" : "") +
         "</div>");
@@ -658,6 +723,7 @@ details.tool summary::-webkit-details-marker{display:none}
 .tbody pre{margin:0 0 8px;padding:10px 12px;background:#0C1721;border-radius:8px;color:#CFE0E8;font-size:12px;line-height:1.55;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .tbody pre.err{color:#F3B7B1}
 .att{border:1px dashed #C9D6D9;border-radius:9px;padding:9px 12px;background:#FBFCFA;font-size:12.5px;margin-top:10px}
+.aprev{display:block;max-width:100%;max-height:420px;margin:0 0 8px;border-radius:6px;border:1px solid #E1E8EA}
 .att .an{font-weight:700}.att .am{font-family:var(--mono);font-size:11px;color:#8A98A3;margin-left:8px}
 .att .mini{font-size:11.5px;margin-left:8px}.att details{margin-top:6px}
 .att summary{cursor:pointer;font-size:12px;color:var(--teal)}
@@ -714,10 +780,10 @@ applyAssets();
     const assets = [];
     const missing = [];
 
-    const model = buildModel(msgs);
-    await collectAttachmentFiles(org, msgs, entries, assets);
+    const filePaths = await collectAttachmentFiles(org, msgs, entries, assets);
     collectArtifacts(msgs, entries, assets);
     await collectDeliveryFiles(org, msgs, entries, assets, missing);
+    const model = buildModel(msgs, filePaths);
 
     entries.unshift({ name: "conversation.json", data: enc.encode(JSON.stringify(conv, null, 2)) });
     const html = buildHtml(conv, model, entries, assets, missing);
@@ -729,7 +795,7 @@ applyAssets();
     return { zip: zip, title: conv.name || "claude-conversation", count: entries.length };
   }
 
-  function buildModel(msgs) {
+  function buildModel(msgs, filePaths) {
     const results = {};
     msgs.forEach(m => (m.content || []).forEach(b => {
       if (b.type === "tool_result") {
@@ -773,9 +839,13 @@ applyAssets();
         });
       });
       (m.files || []).forEach(f => {
+        const uuid = f.file_uuid || f.uuid;
+        const isImg = (f.file_kind || "").indexOf("image") >= 0;
+        const path = (filePaths && uuid && filePaths.get(uuid)) || "";
+        const name = path ? basename(path) : safeName(f.file_name || "文件");
         atts.push({
-          name: safeName(f.file_name || "文件"), kind: f.file_kind || "file",
-          size: f.size_bytes || 0, text: "", path: ""
+          name: name, kind: f.file_kind || "file",
+          size: f.size_bytes || 0, text: "", path: path, image: isImg && !!path
         });
       });
 
