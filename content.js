@@ -285,26 +285,50 @@
     if (typeof cur !== "string") return;
     files.set(target, cur.split(oldS).join(newS));
   }
-  function artifactVersions(msgs, wanted) {
-    const versions = new Map();
+  // 逐次回放，记录每次写入/编辑后的快照，用于输出 vN 版本文件。
+  function artifactVersionSnapshots(msgs, wanted) {
+    const state = new Map();
+    const snaps = new Map();
+    const push = (p, text, source) => {
+      if (!snaps.has(p)) snaps.set(p, []);
+      snaps.get(p).push({ version: snaps.get(p).length + 1, text: text, source: source });
+    };
     msgs.forEach(m => (m.content || []).forEach(b => {
       if (b.type !== "tool_use") return;
       const inp = b.input || {};
-      if (b.name === "Artifact" && inp.file_path && wanted.has(inp.file_path)) {
-        if (!versions.has(inp.file_path)) versions.set(inp.file_path, []);
-        versions.get(inp.file_path).push({ version: versions.get(inp.file_path).length + 1, source: "artifact-tool-use", note: "来自 Artifact 工具调用记录。" });
+      if (b.name === "Bash") {
+        applySimpleSed(String(inp.command || ""), state, p => wanted.has(p));
+        return;
       }
-      if ((b.name === "Write" || b.name === "Edit") && inp.file_path && wanted.has(inp.file_path)) {
-        if (!versions.has(inp.file_path)) versions.set(inp.file_path, []);
-        versions.get(inp.file_path).push({ version: versions.get(inp.file_path).length + 1, source: "write-or-edit", note: b.name + " 记录。" });
+      const p = inp.file_path;
+      if (!p || !wanted.has(p)) return;
+      if (b.name === "Write") {
+        const t = inp.content == null ? "" : inp.content;
+        state.set(p, t);
+        push(p, t, "Write");
+      } else if (b.name === "Edit") {
+        const cur = state.get(p);
+        if (typeof cur !== "string") return;
+        const oldS = inp.old_string || "", newS = inp.new_string || "";
+        if (!oldS) return;
+        let next;
+        if (inp.replace_all) next = cur.split(oldS).join(newS);
+        else {
+          const idx = cur.indexOf(oldS);
+          if (idx < 0) return;
+          next = cur.slice(0, idx) + newS + cur.slice(idx + oldS.length);
+        }
+        state.set(p, next);
+        push(p, next, "Edit");
       }
     }));
-    return versions;
+    return snaps;
   }
   function collectArtifacts(msgs, entries, assets) {
     const wanted = artifactPathSet(msgs);
     if (!wanted.size) return;
     const files = replayFiles(msgs, p => wanted.has(p));
+    const snaps = artifactVersionSnapshots(msgs, wanted);
     const used = new Set();
     files.forEach((text, p) => {
       const base = safeName(basename(p));
@@ -318,10 +342,21 @@
       used.add(name);
       const path = "files/artifacts/" + name;
       entries.push({ name: path, data: enc.encode(text) });
-      const vers = artifactVersions(msgs, wanted).get(p) || [];
+
+      // 有多次写入/编辑时，额外输出每个版本的快照。
+      const vers = snaps.get(p) || [];
+      let vNote = "";
+      if (vers.length > 1) {
+        const stem = name.replace(/\.[^.]+$/, "");
+        vers.forEach(v => {
+          const vName = safeName(stem + ".v" + v.version + "." + ext);
+          entries.push({ name: "files/artifacts/versions/" + vName, data: enc.encode(v.text) });
+        });
+        vNote = "，含 " + vers.length + " 个版本快照（versions/）";
+      }
       addSource(assets, path, ext.toUpperCase().slice(0, 4), name, enc.encode(text).length,
-        "Claude Artifact 源文件，按会话中的写入与编辑记录还原" + (vers.length ? "（" + vers.length + " 次写入/编辑）" : "") + "。",
-        sourceItem("replayed", "session-write-edits", "如需完整版本历史，请保留 conversation.json 重新回放。"));
+        "Claude Artifact 源文件，按会话中的写入与编辑记录还原" + (vers.length ? "（" + vers.length + " 次写入/编辑" + vNote + "）" : "") + "。",
+        sourceItem("replayed", "session-write-edits", "完整版本历史见 files/artifacts/versions/ 与 conversation.json。"));
     });
   }
   function collectDeliveries(msgs) {
@@ -466,15 +501,28 @@
         (a.preview ? '<a class="abtn ghost" href="' + esc(a.path) + '" target="_blank">预览</a>' : "");
     const tag = a.source ? '<span class="asrc" data-src="' + esc(a.source) + '" data-status="' + esc(a.status || "") + '">' +
       esc(a.source) + (a.status && a.status !== "downloaded" ? " · " + a.status : "") + "</span>" : "";
-    return '<div class="acard"><span class="akind">' + esc(a.kind) + "</span>" +
+    return '<div class="acard" data-status="' + esc(a.missing ? "missing" : (a.status || "")) + '">' +
+      '<span class="akind">' + esc(a.kind) + "</span>" +
       '<div class="ainfo"><div class="aname">' + esc(a.name) + "</div>" +
       '<div class="adesc">' + esc(a.desc) + "</div>" +
       '<div class="ameta">' + (a.size ? human(a.size) : "") + "</div>" +
       '<div class="asrcs">' + tag + "</div></div>" +
       '<div class="abtns">' + btn + "</div></div>";
   }
-  function buildManifest(conv, model, entries, assets, missing) {
-    const files = entries.map(e => ({ path: e.name, size: e.data.length }));
+  // SHA-256 via Web Crypto (async, available in content scripts on https origins)
+  async function sha256(buf) {
+    if (typeof crypto !== "undefined" && crypto.subtle) {
+      const hash = await crypto.subtle.digest("SHA-256", buf);
+      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+    return "";
+  }
+  async function buildManifest(conv, model, entries, assets, missing) {
+    const files = [];
+    for (const e of entries) {
+      const h = await sha256(e.data);
+      files.push({ path: e.name, size: e.data.length, sha256: h });
+    }
     return {
       schema: "claude-archive/manifest-v1",
       exported_at: new Date().toISOString(),
@@ -530,6 +578,9 @@
       '<button class="tog" data-k="onlyUser">只看你说</button>' +
       '<button class="tog" id="expand">全部展开</button></div></div></header>' +
       '<div class="layout"><section class="assets"><div class="atitle">会话产出的文件<span class="asub">ZIP 解压后可直接打开，无需再登录 claude.ai</span></div>' +
+      '<div class="abar"><button class="tog on" data-af="all">全部</button>' +
+      '<button class="tog" data-af="original">仅看原件</button>' +
+      '<button class="tog" data-af="missing">仅看缺失</button></div>' +
       '<div class="agrid">' + cards + "</div></section>" +
       '<main id="stream">' + msgs + "</main></div>" +
       '<footer class="end">数据来源：claude.ai 会话接口 · 导出时间 ' + esc(new Date().toLocaleString("zh-CN")) +
@@ -557,6 +608,7 @@ h1{font-size:25px;line-height:1.3;margin:6px 0 10px;font-weight:800}
 .atitle{font-weight:800;font-size:15px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:baseline}
 .asub{font-weight:400;font-size:12px;color:#8A98A3}
 .agrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.abar{display:flex;gap:8px;margin:-2px 0 12px}
 @media(max-width:860px){.agrid{grid-template-columns:1fr}.top-in,.layout{padding-left:18px;padding-right:18px}}
 .acard{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:#FCFDFB}
 .akind{flex:0 0 auto;font-family:var(--mono);font-size:10px;font-weight:700;color:#fff;background:var(--teal);border-radius:5px;padding:3px 6px;margin-top:2px}
@@ -617,7 +669,15 @@ footer.end{max-width:1180px;margin:0 auto;padding:0 32px 60px;color:#93A1A9;font
 
   const PAGE_JS = `
 const state={think:true,tool:true,onlyUser:false};
+let af='all';
 const q=document.getElementById('q');
+function applyAssets(){
+  document.querySelectorAll('.acard').forEach(c=>{
+    const st=c.dataset.status||'';
+    c.classList.toggle('hidden',!(af==='all'||(af==='missing'?st==='missing':st==='downloaded')));
+  });
+  document.querySelectorAll('.tog[data-af]').forEach(b=>b.classList.toggle('on',b.dataset.af===af));
+}
 function apply(){
   const kw=q.value.trim().toLowerCase();
   document.querySelectorAll('.msg').forEach(m=>{
@@ -630,6 +690,7 @@ function apply(){
   document.querySelectorAll('.tog[data-k]').forEach(b=>b.classList.toggle('on',!!state[b.dataset.k]));
 }
 document.querySelectorAll('.tog[data-k]').forEach(b=>b.addEventListener('click',()=>{state[b.dataset.k]=!state[b.dataset.k];apply();}));
+document.querySelectorAll('.tog[data-af]').forEach(b=>b.addEventListener('click',()=>{af=b.dataset.af;applyAssets();}));
 q.addEventListener('input',apply);
 document.addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus();}if(e.key==='Escape'&&document.activeElement===q){q.value='';apply();q.blur();}});
 document.getElementById('expand').addEventListener('click',()=>{
@@ -637,6 +698,7 @@ document.getElementById('expand').addEventListener('click',()=>{
   document.querySelectorAll('details').forEach(d=>d.open=open);
 });
 apply();
+applyAssets();
 `;
 
   /* ---------------- 主流程 ---------------- */
@@ -660,7 +722,8 @@ apply();
     entries.unshift({ name: "conversation.json", data: enc.encode(JSON.stringify(conv, null, 2)) });
     const html = buildHtml(conv, model, entries, assets, missing);
     entries.unshift({ name: "index.html", data: enc.encode(html) });
-    entries.push({ name: "manifest.json", data: enc.encode(JSON.stringify(buildManifest(conv, model, entries, assets, missing), null, 2)) });
+    const manifest = await buildManifest(conv, model, entries, assets, missing);
+    entries.push({ name: "manifest.json", data: enc.encode(JSON.stringify(manifest, null, 2)) });
 
     const zip = makeZip(entries);
     return { zip: zip, title: conv.name || "claude-conversation", count: entries.length };
